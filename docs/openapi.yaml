@@ -1,0 +1,110 @@
+openapi: 3.0.3
+info:
+  title: Auth Service API
+  version: 1.0.0
+  description: Centralized authentication and identity API for microservices.
+servers:
+  - url: http://localhost:4000
+paths:
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        '200':
+          description: OK
+  /api/v1/auth/register:
+    post:
+      summary: Register user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+      responses:
+        '201': { description: Created }
+        '400': { description: Validation error }
+        '409': { description: Email already exists }
+  /api/v1/auth/login:
+    post:
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        '200': { description: Tokens issued }
+        '401': { description: Invalid credentials }
+  /api/v1/auth/refresh:
+    post:
+      summary: Rotate refresh token and issue new access token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { description: New tokens }
+        '401': { description: Invalid or reused refresh token }
+  /api/v1/auth/logout:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Logout (blacklist access, delete refresh slot)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { description: Logged out }
+        '401': { description: Unauthorized }
+  /api/v1/auth/me:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Current user profile
+      responses:
+        '200': { description: User }
+        '401': { description: Unauthorized }
+  /api/v1/auth/validate:
+    post:
+      summary: Validate access token (for gateways / internal callers)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '200': { description: Token metadata }
+        '401': { description: Invalid or revoked }
+  /api/v1/admin/ping:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Example RBAC-protected route (admin or super-admin)
+      responses:
+        '200': { description: OK }
+        '403': { description: Forbidden }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
