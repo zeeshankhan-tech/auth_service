@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auth Service — System Design</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11.4.0/dist/mermaid.esm.min.mjs';
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'default',
+      securityLevel: 'loose',
+      flowchart: { useMaxWidth: true, htmlLabels: true },
+      sequence: { useMaxWidth: true },
+    });
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      try {
+        await mermaid.run({ querySelector: 'pre.mermaid, .mermaid' });
+      } catch (err) {
+        console.error('Mermaid render error:', err);
+      }
+    });
+  </script>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --text: #1f2328;
+      --muted: #656d76;
+      --border: #d0d7de;
+      --code-bg: #f6f8fa;
+      --accent: #0969da;
+      --table-stripe: #f6f8fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: var(--text);
+      background: var(--bg);
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+    h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+    h2 { font-size: 1.5rem; margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
+    h3 { font-size: 1.15rem; margin-top: 1.5rem; }
+    p { margin: 0.75em 0; }
+    strong { font-weight: 600; }
+    a { color: var(--accent); }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1em 0;
+      font-size: 0.95rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+    }
+    th { background: var(--table-stripe); font-weight: 600; }
+    tr:nth-child(even) td { background: var(--table-stripe); }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-x: auto;
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 0.9em;
+    }
+    p code, li code, td code {
+      background: var(--code-bg);
+      padding: 0.15em 0.35em;
+      border-radius: 4px;
+    }
+    .mermaid {
+      margin: 1.25rem 0;
+      text-align: center;
+    }
+    .toc { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.25rem; }
+    .toc ol { margin: 0.5em 0 0; padding-left: 1.25rem; }
+    .toc li { margin: 0.25em 0; }
+    .subtitle { color: var(--muted); font-size: 1.05rem; margin-top: -0.5rem; }
+  </style>
+</head>
+<body>
+
+<h1>Auth Service — Complete System Design</h1>
+<p class="subtitle">Centralized <strong>identity &amp; authentication</strong> microservice. Other services do not store passwords; they trust JWTs (locally) or call <code>POST /validate</code>.</p>
+
+<nav class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#s1">High-level architecture (C4 — context)</a></li>
+    <li><a href="#s2">Application layers (internal design)</a></li>
+    <li><a href="#s3">Data model &amp; Redis keys</a></li>
+    <li><a href="#s4">Token issuance (login / register)</a></li>
+    <li><a href="#s5">Protected API — access token validation</a></li>
+    <li><a href="#s6">Refresh token rotation</a></li>
+    <li><a href="#s7">Logout flows</a></li>
+    <li><a href="#s8">Password reset flow</a></li>
+    <li><a href="#s9">Multi-device sessions</a></li>
+    <li><a href="#s10">Other microservices integration</a></li>
+    <li><a href="#s11">Invalidation matrix (reference)</a></li>
+    <li><a href="#s12">API surface (system boundaries)</a></li>
+    <li><a href="#s13">Deployment topology</a></li>
+    <li><a href="#s14">Security properties (design intent)</a></li>
+    <li><a href="#s15">One-page mental model</a></li>
+  </ol>
+</nav>
+
+<hr />
+
+<h2 id="s1">1. High-level architecture (C4 — context)</h2>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph clients ["Clients"]
+    Web["Web / Mobile App"]
+    GW["API Gateway optional"]
+  end
+
+  subgraph auth_svc ["Auth Service - Node Express"]
+    API["HTTP API Layer"]
+    MW["Middlewares"]
+    SVC["AuthService and SessionService"]
+    JWT["JWT HS256"]
+  end
+
+  subgraph data ["Data Stores"]
+    Mongo[("MongoDB")]
+    Redis[("Redis")]
+  end
+
+  subgraph others ["Other Microservices"]
+    Order["Order Service"]
+    Catalog["Catalog Service"]
+  end
+
+  Web --> GW
+  GW --> API
+  Web --> API
+  API --> MW
+  MW --> SVC
+  SVC --> JWT
+  SVC --> Mongo
+  SVC --> Redis
+  Order -->|"POST validate or local JWT"| API
+  Catalog --> API
+</pre>
+
+<table>
+  <thead>
+    <tr><th>Component</th><th>Responsibility</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Auth Service</strong></td><td>Register, login, tokens, sessions, RBAC helpers, password reset</td></tr>
+    <tr><td><strong>MongoDB</strong></td><td>Users, refresh sessions, password-reset tokens (source of truth)</td></tr>
+    <tr><td><strong>Redis</strong></td><td>Refresh cache, access blacklist, revoked refresh families, rate limits</td></tr>
+    <tr><td><strong>Clients</strong></td><td>Hold <code>accessToken</code> + <code>refreshToken</code>; send <code>Authorization: Bearer</code></td></tr>
+  </tbody>
+</table>
+
+<p><strong>Docker runtime:</strong> <code>app</code> + <code>mongodb</code> + <code>redis</code> on shared network (<code>docker-compose.yml</code>).</p>
+
+<hr />
+
+<h2 id="s2">2. Application layers (internal design)</h2>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph http ["HTTP"]
+    R["Routes"]
+    C["Controllers"]
+    D["DTOs"]
+  end
+
+  subgraph domain ["Domain"]
+    AS["AuthService"]
+    SS["SessionService"]
+  end
+
+  subgraph infra ["Infrastructure"]
+    UR["UserRepository"]
+    RR["RefreshSessionRepository"]
+    PR["PasswordResetTokenRepository"]
+    TS["token.store Redis"]
+    J["jwt.js"]
+  end
+
+  subgraph stores ["Stores"]
+    M[("MongoDB")]
+    Re[("Redis")]
+  end
+
+  R --> C
+  C --> AS
+  C --> D
+  AS --> SS
+  AS --> UR
+  AS --> PR
+  AS --> J
+  AS --> TS
+  SS --> RR
+  SS --> TS
+  UR --> M
+  RR --> M
+  PR --> M
+  TS --> Re
+</pre>
+
+<p><strong>Request pipeline (typical protected route):</strong></p>
+<pre>Client → helmet/cors/json → rateLimit → validate(Zod) → authenticate → authorize? → controller → service → repo/cache → DTO → JSON</pre>
+
+<hr />
+
+<h2 id="s3">3. Data model &amp; Redis keys</h2>
+
+<pre class="mermaid">
+erDiagram
+  USERS ||--o{ REFRESH_SESSIONS : has
+  USERS ||--o{ PASSWORD_RESET_TOKENS : has
+
+  USERS {
+    string id
+    string email
+    string password_hash
+    string roles
+    boolean isActive
+    int tokenVersion
+  }
+
+  REFRESH_SESSIONS {
+    string jti
+    string userId
+    string familyId
+    string tokenHash
+    string deviceInfo
+    date expiresAt
+    boolean revoked
+  }
+
+  PASSWORD_RESET_TOKENS {
+    string id
+    string userId
+    string tokenHash
+    date expiresAt
+    boolean used
+  }
+</pre>
+
+<table>
+  <thead>
+    <tr><th>Redis key</th><th>Value</th><th>When set</th><th>When cleared</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>rt:{jti}</code></td><td><code>{ userId, familyId }</code></td><td>Login / register / refresh</td><td>Logout, revoke session, logout-all, consume on refresh</td></tr>
+    <tr><td><code>abl:{jti}</code></td><td><code>"1"</code></td><td>Logout / logout-all (current access only)</td><td>TTL = access token remaining life</td></tr>
+    <tr><td><code>rfam:revoked:{familyId}</code></td><td><code>"1"</code></td><td>Refresh token reuse detected</td><td>TTL ~30 days</td></tr>
+  </tbody>
+</table>
+
+<p><strong>JWT claims (not in DB):</strong></p>
+<table>
+  <thead>
+    <tr><th>Token</th><th>Secret</th><th>Claims</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Access</td><td><code>JWT_ACCESS_SECRET</code></td><td><code>typ=access</code>, <code>sub</code>, <code>roles</code>, <code>tv</code>, <code>jti</code>, <code>exp</code></td></tr>
+    <tr><td>Refresh</td><td><code>JWT_REFRESH_SECRET</code></td><td><code>typ=refresh</code>, <code>sub</code>, <code>fam</code>, <code>tv</code>, <code>jti</code>, <code>exp</code></td></tr>
+  </tbody>
+</table>
+
+<hr />
+
+<h2 id="s4">4. Token issuance (login / register)</h2>
+
+<pre class="mermaid">
+sequenceDiagram
+  participant C as Client
+  participant API as Auth API
+  participant AS as AuthService
+  participant M as MongoDB
+  participant R as Redis
+
+  C->>API: POST login or register
+  API->>AS: login or register
+  AS->>M: find or create user
+  AS->>M: read tokenVersion
+  AS->>AS: sign access JWT new jti
+  AS->>AS: sign refresh JWT new familyId
+  AS->>M: INSERT refresh_sessions
+  AS->>R: SET rt jti with TTL
+  AS-->>API: user and tokens
+  API-->>C: return access and refresh tokens
+</pre>
+
+<p><strong>Multi-device:</strong> each login adds a <strong>new</strong> <code>refresh_sessions</code> row + new <code>rt:{jti}</code>; old devices unchanged.</p>
+
+<hr />
+
+<h2 id="s5">5. Protected API — access token validation</h2>
+
+<pre class="mermaid">
+flowchart TD
+  A["Bearer access JWT"] --> B{"Token present?"}
+  B -->|No| E1["401 Missing bearer token"]
+  B -->|Yes| C["verifyAccessToken HS256 and exp"]
+  C -->|Fail| E2["401 Invalid access token"]
+  C --> D{"typ is access?"}
+  D -->|No| E2
+  D --> F["Redis GET abl jti"]
+  F -->|exists| E3["401 Token revoked"]
+  F --> G["Mongo findById sub"]
+  G -->|missing| E4["401 User not available"]
+  G --> H{"isActive?"}
+  H -->|No| E4
+  H --> I{"tokenVersion matches tv?"}
+  I -->|No| E5["401 Token version mismatch"]
+  I --> J["Set req.auth from DB"]
+  J --> K{"authorize middleware?"}
+  K -->|role mismatch| E6["403 Insufficient role"]
+  K --> L["Controller business logic"]
+</pre>
+
+<p><strong>Note:</strong> <code>roles</code> on <code>req.auth</code> come from <strong>Mongo</strong>, not only from JWT.</p>
+
+<hr />
+
+<h2 id="s6">6. Refresh token rotation</h2>
+
+<pre class="mermaid">
+sequenceDiagram
+  participant C as Client
+  participant API as Auth API
+  participant AS as AuthService
+  participant R as Redis
+  participant M as MongoDB
+
+  C->>API: POST refresh
+  API->>AS: refresh
+  AS->>AS: verifyRefreshToken
+  AS->>R: check family revoked
+  alt family revoked
+    API-->>C: 401 family revoked
+  end
+  AS->>R: GETDEL rt jti
+  alt Redis miss
+    AS->>M: find session by jti
+    AS->>M: revoke row
+  end
+  alt session missing or reuse
+    AS->>R: mark family revoked
+    API-->>C: 401 reuse detected
+  end
+  AS->>M: load user check tv
+  AS->>AS: issueAuthTokens same familyId
+  AS->>M: new refresh_sessions row
+  AS->>R: SET new rt jti
+  API-->>C: new access and refresh tokens
+</pre>
+
+<p>Old refresh JWT is <strong>single-use</strong>; replay revokes entire <strong>family</strong>.</p>
+
+<hr />
+
+<h2 id="s7">7. Logout flows</h2>
+
+<h3>7a. Single device — <code>POST /logout</code></h3>
+
+<pre class="mermaid">
+flowchart LR
+  subgraph access ["Access token"]
+    A1["authenticate passes"] --> A2["Redis SET abl jti TTL"]
+  end
+  subgraph refresh ["Refresh token"]
+    R1["verify refresh JWT"] --> R2["Mongo revoke session"]
+    R2 --> R3["Redis DEL rt jti"]
+  end
+  TV["tokenVersion unchanged"]
+</pre>
+
+<p>Other devices keep working.</p>
+
+<h3>7b. All devices — <code>POST /logout-all</code></h3>
+
+<pre class="mermaid">
+flowchart TD
+  A["authenticate"] --> B["Optional blacklist access abl jti"]
+  B --> C["Mongo revoke all refresh_sessions"]
+  C --> D["Redis DEL all rt jti for user"]
+  D --> E["Mongo tokenVersion increment"]
+  E --> F["All access JWTs with old tv fail"]
+  E --> G["All refresh JWTs with old tv fail"]
+</pre>
+
+<table>
+  <thead>
+    <tr><th>Store</th><th>Refresh on logout-all</th><th>Access on logout-all</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Mongo</td><td>Rows <strong>revoked</strong>, not deleted</td><td><code>tokenVersion++</code></td></tr>
+    <tr><td>Redis</td><td>All <code>rt:{jti}</code> <strong>deleted</strong></td><td>Only current <code>abl:{jti}</code> (others die via <code>tv</code>)</td></tr>
+  </tbody>
+</table>
+
+<p>Same pattern for <strong>change-password</strong> and <strong>reset-password</strong>.</p>
+
+<hr />
+
+<h2 id="s8">8. Password reset flow</h2>
+
+<pre class="mermaid">
+sequenceDiagram
+  participant C as Client
+  participant API as Auth API
+  participant AS as AuthService
+  participant M as MongoDB
+
+  C->>API: POST forgot-password
+  API->>AS: forgotPassword
+  AS->>M: find user
+  alt user exists
+    AS->>M: INSERT password_reset_token
+    Note over AS: dev only return resetToken
+  end
+  API-->>C: generic success message
+
+  C->>API: POST reset-password
+  API->>AS: resetPassword
+  AS->>M: validate token mark used
+  AS->>M: update password
+  AS->>M: revoke all refresh_sessions
+  AS->>AS: revokeAll Redis rt keys
+  AS->>M: increment tokenVersion
+  API-->>C: success
+</pre>
+
+<p>Production still needs an <strong>email provider</strong> (not in repo).</p>
+
+<hr />
+
+<h2 id="s9">9. Multi-device sessions</h2>
+
+<pre class="mermaid">
+flowchart TB
+  U["User"] --> L1["Laptop login"]
+  U --> P["Phone login"]
+  L1 --> S1["Session jti A family F1"]
+  P --> S2["Session jti B family F2"]
+  S1 --> M1[("Mongo row A")]
+  S2 --> M2[("Mongo row B")]
+  S1 --> R1["Redis rt A"]
+  S2 --> R2["Redis rt B"]
+
+  API["GET sessions"] --> List["List active sessions"]
+  DEL["DELETE session by jti"] --> Revoke["Revoke one device"]
+</pre>
+
+<hr />
+
+<h2 id="s10">10. Other microservices integration</h2>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph optionA ["Option A - Central introspection"]
+    MS["Microservice"] -->|"POST validate"| AUTH["Auth Service"]
+    AUTH --> Redis
+    AUTH --> Mongo
+    AUTH --> MS
+  end
+
+  subgraph optionB ["Option B - Local JWT verify"]
+    MS2["Microservice"] -->|"verify JWT locally"| MS2
+    MS2 -->|"optional"| Redis2["Shared Redis abl keys"]
+    MS2 -->|"optional"| AUTH2["Auth for tv cache"]
+  end
+</pre>
+
+<table>
+  <thead>
+    <tr><th>Approach</th><th>Pros</th><th>Cons</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>/validate</strong></td><td>Always fresh roles + <code>tv</code> + blacklist</td><td>Extra HTTP hop</td></tr>
+    <tr><td><strong>Local verify</strong></td><td>Fast</td><td>Need shared secret; blacklist/<code>tv</code> need Redis or short access TTL</td></tr>
+  </tbody>
+</table>
+
+<hr />
+
+<h2 id="s11">11. Invalidation matrix (reference)</h2>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph mechanisms ["Invalidation mechanisms"]
+    EXP["JWT exp"]
+    ABL["Redis abl jti"]
+    RT["Revoke rt jti Mongo revoked"]
+    TV["tokenVersion mismatch"]
+    FAM["rfam revoked familyId"]
+  end
+
+  LOGOUT1["Logout one device"] --> ABL
+  LOGOUT1 --> RT
+  LOGOUTALL["Logout all or password"] --> RT
+  LOGOUTALL --> TV
+  REFRESH_REUSE["Refresh reuse"] --> FAM
+  EXP --> ALL["All tokens eventually"]
+</pre>
+
+<hr />
+
+<h2 id="s12">12. API surface (system boundaries)</h2>
+
+<pre class="mermaid">
+flowchart LR
+  subgraph public ["No auth"]
+    REG["POST register"]
+    LOG["POST login"]
+    REF["POST refresh"]
+    VAL["POST validate"]
+    FP["POST forgot-password"]
+    RP["POST reset-password"]
+    HL["GET health"]
+  end
+
+  subgraph protected ["Bearer access JWT"]
+    ME["GET me"]
+    LO["POST logout"]
+    LA["POST logout-all"]
+    CP["POST change-password"]
+    SE["GET sessions"]
+    DS["DELETE session by jti"]
+  end
+
+  subgraph rbac ["Bearer plus role"]
+    AD["GET admin ping"]
+    SL["GET seller ping"]
+  end
+</pre>
+
+<hr />
+
+<h2 id="s13">13. Deployment topology</h2>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph host ["Docker Host"]
+    APP["auth-service port 4000"]
+    MONGO["mongodb port 27017"]
+    REDIS["redis port 6379"]
+  end
+
+  APP --> MONGO
+  APP --> REDIS
+  Client["Postman or Frontend"] --> APP
+</pre>
+
+<hr />
+
+<h2 id="s14">14. Security properties (design intent)</h2>
+
+<table>
+  <thead>
+    <tr><th>Property</th><th>How</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Password safety</td><td>bcrypt on User model</td></tr>
+    <tr><td>Refresh theft detection</td><td>Rotation + family revoke on reuse</td></tr>
+    <tr><td>Instant single-device logout</td><td><code>abl:{jti}</code></td></tr>
+    <tr><td>Instant global logout</td><td><code>tokenVersion</code> + revoke all sessions</td></tr>
+    <tr><td>No email enumeration</td><td>Same forgot-password response</td></tr>
+    <tr><td>Reset token safety</td><td>Hash in DB, 1h TTL, single-use</td></tr>
+    <tr><td>Abuse limiting</td><td>Rate limiter on auth routes</td></tr>
+  </tbody>
+</table>
+
+<hr />
+
+<h2 id="s15">15. One-page mental model</h2>
+
+<pre>┌─────────────┐     access JWT (short)     ┌──────────────────────────────┐
+│   Client    │ ─────────────────────────▶ │ Protected APIs               │
+└─────────────┘                            │ JWT → Redis abl → Mongo tv   │
+       │                                   └──────────────────────────────┘
+       │ refresh JWT (long)
+       ▼
+┌──────────────────────────────┐
+│ POST /refresh                │
+│ JWT → Redis rt / Mongo       │
+│ rotate jti, same family      │
+└──────────────────────────────┘
+
+Mongo = users, sessions (truth), reset tokens
+Redis = speed layer + blacklist + family revoke</pre>
+
+<hr />
+
+<p><em>Generated from Auth Service system design. Open this file in a browser for rendered Mermaid diagrams.</em></p>
+
+</body>
+</html>
