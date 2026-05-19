@@ -6,10 +6,11 @@ class ApiError extends Error {
     this.name = 'ApiError';
     this.statusCode = statusCode;
     this.details = details;
+    this.isOperational = true;
     Error.captureStackTrace(this, this.constructor);
   }
 
-  static badRequest(message, details) {
+  static badRequest(message = 'Bad request', details) {
     return new ApiError(HTTP_STATUS.BAD_REQUEST, message, details);
   }
 
@@ -25,7 +26,7 @@ class ApiError extends Error {
     return new ApiError(HTTP_STATUS.NOT_FOUND, message, details);
   }
 
-  static conflict(message, details) {
+  static conflict(message = 'Conflict', details) {
     return new ApiError(HTTP_STATUS.CONFLICT, message, details);
   }
 

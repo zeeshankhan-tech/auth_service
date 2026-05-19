@@ -16,6 +16,7 @@ class TokenPairDto {
       refreshToken: raw.refreshToken,
       tokenType: raw.tokenType || 'Bearer',
       expiresIn: raw.expiresIn,
+      ...(raw.sessionId ? { sessionId: raw.sessionId } : {}),
     };
   }
 }

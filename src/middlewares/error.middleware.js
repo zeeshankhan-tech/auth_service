@@ -20,8 +20,11 @@ function errorMiddleware(err, req, res, next) {
     message = 'Internal server error';
   }
 
-  if (status >= 500) {
-    logger.error({ err, path: req.path }, err?.message || message);
+  const isOperational = err instanceof ApiError && err.isOperational;
+  if (!isOperational) {
+    logger.error({ err, path: req.path, operational: false }, err?.message || message);
+  } else if (status >= 500) {
+    logger.error({ err, path: req.path, operational: true }, err?.message || message);
   }
 
   const body = {

@@ -59,6 +59,79 @@ paths:
       responses:
         '200': { description: New tokens }
         '401': { description: Invalid or reused refresh token }
+  /api/v1/auth/logout-all:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Logout all devices (revoke all refresh sessions, bump tokenVersion)
+      responses:
+        '200': { description: Logged out everywhere }
+        '401': { description: Unauthorized }
+  /api/v1/auth/change-password:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Change password and revoke all sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Password changed }
+        '401': { description: Unauthorized }
+  /api/v1/auth/forgot-password:
+    post:
+      summary: Request password reset (resetToken returned only in development)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: Generic success message }
+  /api/v1/auth/reset-password:
+    post:
+      summary: Reset password with token from forgot-password flow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, newPassword]
+              properties:
+                token: { type: string }
+                newPassword: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Password reset }
+        '400': { description: Invalid token }
+  /api/v1/auth/sessions:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List active refresh sessions for current user
+      responses:
+        '200': { description: Session list }
+        '401': { description: Unauthorized }
+  /api/v1/auth/sessions/{jti}:
+    delete:
+      security: [{ bearerAuth: [] }]
+      summary: Revoke one refresh session by jti
+      parameters:
+        - name: jti
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Session revoked }
+        '404': { description: Not found }
   /api/v1/auth/logout:
     post:
       security: [{ bearerAuth: [] }]
@@ -99,6 +172,13 @@ paths:
     get:
       security: [{ bearerAuth: [] }]
       summary: Example RBAC-protected route (admin or super-admin)
+      responses:
+        '200': { description: OK }
+        '403': { description: Forbidden }
+  /api/v1/seller/ping:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Example RBAC-protected route (seller, admin, or super-admin)
       responses:
         '200': { description: OK }
         '403': { description: Forbidden }

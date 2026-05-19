@@ -32,7 +32,9 @@ Centralized **authentication and identity** microservice for Node.js backends. I
 |------|--------|
 | Express app, health route, auth routes | Done |
 | MongoDB user model + repository | Done |
-| Redis client + token store (refresh, blacklist) | Done |
+| Redis client + token store (refresh cache, blacklist) | Done |
+| MongoDB `refresh_sessions` (source of truth) + write-through Redis | Done |
+| Logout all, change/reset password, session list/revoke | Done |
 | JWT access + refresh, rotation | Done |
 | Auth service (register, login, refresh, logout, me, validate) | Done |
 | Zod validators + validate middleware | Done |
@@ -322,10 +324,22 @@ For **`GET /api/v1/auth/me`**:
 
 ## RBAC
 
-- Roles: **`user`**, **`admin`**, **`super-admin`** (`src/constants/roles.js`).
+- Roles: **`user`**, **`seller`**, **`admin`**, **`super-admin`** (`src/constants/roles.js`).
 - **`authenticate()`** loads roles from DB after JWT verification (aligned with `tokenVersion`).
 - **`authorize('admin', 'super-admin')`** — role names.
 - **`requirePermission('users:read')`** — uses **`ROLE_PERMISSIONS`**.
+
+---
+
+## Refresh session storage (Mongo + Redis)
+
+| Layer | Role |
+|-------|------|
+| **MongoDB `refresh_sessions`** | Source of truth: `jti`, `userId`, `familyId`, `tokenHash`, `deviceInfo`, `expiresAt`, `revoked` |
+| **Redis `rt:{jti}`** | Fast cache; Mongo fallback on miss during refresh |
+
+**Write-through:** login/register/refresh → Mongo then Redis.  
+**Logout-all / change-password / reset-password:** revoke all Mongo rows, clear Redis, bump `tokenVersion`.
 
 ---
 
@@ -333,7 +347,7 @@ For **`GET /api/v1/auth/me`**:
 
 | Pattern | Use |
 |---------|-----|
-| `rt:{jti}` | Refresh session slot |
+| `rt:{jti}` | Refresh session cache |
 | `abl:{jti}` | Access blacklist |
 | `sess:{id}` | Optional session blob |
 | `usess:{userId}` | Set of session ids |
@@ -366,7 +380,7 @@ Compose sets **`MONGODB_URI`** / **`REDIS_URL`** for in-network hosts; JWT value
 
 ## Testing
 
-- **`npm test`** — Jest + Supertest + **ioredis-mock** (12 tests: auth flows, health, RBAC).  
+- **`npm test`** — Jest + Supertest + **ioredis-mock** (16 tests: auth flows, sessions, passwords, health, RBAC).  
 - **`npm run test:e2e`** — smoke test against Docker (`scripts/docker-e2e.sh`; run `docker compose up -d` first).  
 - Mongo: **`TEST_MONGODB_URI`** for a real Mongo (sandboxes), or **mongodb-memory-server** by default; optional **`MONGOMS_SYSTEM_BINARY`**.  
 - See **`src/tests/mongoTestHelper.js`**.
@@ -380,7 +394,13 @@ Compose sets **`MONGODB_URI`** / **`REDIS_URL`** for in-network hosts; JWT value
 | POST | `/api/v1/auth/register` | No | Register + tokens |
 | POST | `/api/v1/auth/login` | No | Login + tokens |
 | POST | `/api/v1/auth/refresh` | No | Rotate refresh |
-| POST | `/api/v1/auth/logout` | Bearer | Logout |
+| POST | `/api/v1/auth/logout` | Bearer | Logout (this device) |
+| POST | `/api/v1/auth/logout-all` | Bearer | Logout all devices |
+| POST | `/api/v1/auth/change-password` | Bearer | Change password + revoke sessions |
+| POST | `/api/v1/auth/forgot-password` | No | Request reset (`resetToken` in dev only) |
+| POST | `/api/v1/auth/reset-password` | No | Reset password with token |
+| GET | `/api/v1/auth/sessions` | Bearer | List active sessions |
+| DELETE | `/api/v1/auth/sessions/:jti` | Bearer | Revoke one session |
 | GET | `/api/v1/auth/me` | Bearer | Profile |
 | POST | `/api/v1/auth/validate` | No | Introspect token |
 | GET | `/health` | No | Liveness |

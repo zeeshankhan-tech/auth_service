@@ -1,5 +1,5 @@
-module.exports = {
-  HTTP_STATUS: {
+module.exports = Object.freeze({
+  HTTP_STATUS: Object.freeze({
     OK: 200,
     CREATED: 201,
     NO_CONTENT: 204,
@@ -10,5 +10,5 @@ module.exports = {
     CONFLICT: 409,
     TOO_MANY_REQUESTS: 429,
     INTERNAL_SERVER_ERROR: 500,
-  },
-};
+  }),
+});

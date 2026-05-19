@@ -6,6 +6,7 @@ const { TokenRefreshResponseDto } = require('./token-refresh.dto');
 const { ValidateTokenResponseDto } = require('./validate-token-response.dto');
 const { LogoutResponseDto } = require('./logout-response.dto');
 const { MeResponseDto } = require('./me-response.dto');
+const { SessionDto, SessionsListDto } = require('./session.dto');
 
 module.exports = {
   ApiResponseDto,
@@ -16,4 +17,6 @@ module.exports = {
   ValidateTokenResponseDto,
   LogoutResponseDto,
   MeResponseDto,
+  SessionDto,
+  SessionsListDto,
 };

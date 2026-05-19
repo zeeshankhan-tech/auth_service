@@ -19,4 +19,15 @@ router.get(
   }),
 );
 
+router.get(
+  '/seller/ping',
+  authenticate(),
+  authorize(ROLES.SELLER, ROLES.ADMIN, ROLES.SUPER_ADMIN),
+  asyncHandler(async (req, res) => {
+    res
+      .status(HTTP_STATUS.OK)
+      .json(ApiResponseDto.success({ message: 'seller-ok', userId: req.auth.userId }));
+  }),
+);
+
 module.exports = router;
